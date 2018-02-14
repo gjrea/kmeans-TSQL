@@ -1,0 +1,187 @@
+/*
+-- hold the data to be clustered. Note: it is pretty straightforward to scaled the data in SQL, 
+--I have already done so on a test data set and filled in the data to be clustered with this scaled data
+create table  [dbo].[t_km_data_tmp] 
+	(
+		[prim_key] int primary key
+		,cluster_id int
+		,data1 int
+		,data1_scaled float
+		,data2 int
+		,data2_scaled float );
+create table [dbo].[t_km_clusters_tmp] -- hold the centroids with current values through each iteration
+	(
+		id int NOT NULL identity primary key
+		,data1 int
+		,data1_scaled float
+		,data2 int
+		,data2_scaled float
+	);
+ 
+ */
+ 
+/*
+When running a kmeans clustering with the distance = Euclidean distance, it is possible to have some variables dominate 
+others by size. Example: if the data1 for two prim_keys and data2 are:
+			data1		data2
+prim_key1	20,000		81 
+prim_key2	22,000		30 
+
+Then the euclidean distance squared is
+
+d^2 = (22,000 - 20,000)^2 + (30-81)^2 = 4,002,601 
+
+			data1		data2
+prim_key3	20,000		81 
+prim_key4	22,000		80 
+
+Then the euclidean distance squared is
+
+d^2 = (22,000 - 20,000)^2 + (80-81)^2 = 4,000,001
+
+and the difference between these two would be 0.00065 even thogh they are clearly not meant to be clustered together
+
+To minimize this, we should normalize (in the mathematical sense) the scale. 
+
+so take data1_prim_key1 / max(data1) for All prim_keys which is a number between 0 and 1. 
+Likewise with data2
+data2_prim_key1 / max(data2) will be a number between 0 and 1. Now the 
+dimensions have equal weight and the weights can be adjusted in the future with
+
+d^2 = (weight_1) x (data1_1 - data1_2)^2 + (weight_2) x (data2_1 - data2_2)^2
+
+the weighted euclidean distance. This allows more importance to be put on any dimension. 
+ 
+*/
+ 
+ /* insert the following data for testing
+
+ INSERT INTO [dbo].[t_km_data_tmp]
+           ([prim_key]
+           ,[cluster_id]
+           ,[data1]
+           ,[data1_scaled]
+           ,[data2]
+           ,[data2_scaled])
+     VALUES
+
+(7826,0,4419.3,0.133451462,157,0.558718861),
+(13328,0,5715,0.17257826,163,0.580071174),
+(14656,0,6981.43,0.21082118,168,0.597864769),
+(17573,0,3276.81,0.098951211,144,0.512455516),
+(5857,0,3139,0.094789704,148,0.526690391),
+(12355,0,4228.86,0.127700665,154,0.548042705),
+(1543,0,3227.92,0.097474859,153,0.544483986),
+(15366,0,5546,0.167474896,170,0.604982206),
+(15698,0,5169.27,0.156098622,166,0.590747331),
+(2823,0,4111.71,0.124163037,141,0.501779359),
+(8110,0,5402.39,0.163138244,157,0.558718861),
+(10434,0,5415.49,0.163533831,157,0.558718861),
+(15057,0,4067.61,0.122831331,167,0.59430605),
+(15180,0,2866.2,0.086551848,141,0.501779359),
+(16717,0,2626.47,0.07931262,135,0.480427046),
+(3673,0,3580.99,0.108136662,160,0.569395018),
+(8327,0,2938.26,0.088727874,149,0.53024911),
+(10835,0,7870.32,0.237663365,167,0.59430605),
+(4320,0,3883.75,0.117279233,162,0.576512456),
+(6976,0,4489.75,0.13557887,165,0.587188612),
+(9601,0,4796.31,0.144836192,163,0.580071174),
+(12263,0,5075.75,0.153274559,163,0.580071174),
+(16368,0,5238.03,0.158174996,168,0.597864769),
+(825,0,7054.8,0.213036765,169,0.601423488),
+(11645,0,5571.06,0.168231643,170,0.604982206),
+(18231,0,3772.58,0.113922186,135,0.480427046),
+(9515,0,4610.84,0.139235476,155,0.551601423),
+(10394,0,4793.28,0.144744693,160,0.569395018),
+(10843,0,5141.8,0.155269099,152,0.540925267),
+(11722,0,9517.14,0.287393082,170,0.604982206),
+(14888,0,3343.4,0.100962057,147,0.523131673),
+(17888,0,3329.28,0.100535669,150,0.533807829),
+(2637,0,7249.4,0.218913183,166,0.590747331),
+(9707,0,6767.26,0.204353798,168,0.597864769),
+(11035,0,6886.68,0.207959974,169,0.601423488),
+(13952,0,6402.4,0.193335967,167,0.59430605),
+(19202,0,2751.77,0.083096357,144,0.512455516),
+(3032,0,4679.52,0.141309435,167,0.59430605),
+(3573,0,2893.4,0.087373218,151,0.537366548),
+(4938,0,7382.26,0.222925212,165,0.587188612),
+(6266,0,5285.06,0.159595181,152,0.540925267),
+(7360,0,5267.78,0.15907337,169,0.601423488),
+(11344,0,2854.95,0.086212127,141,0.501779359),
+(14971,0,4664.71,0.140862211,162,0.576512456),
+(2096,0,5584.2,0.168628438,164,0.583629893),
+(2339,0,5077.42,0.153324989,164,0.583629893),
+(11831,0,5609.46,0.169391224,161,0.572953737),
+(12910,0,3544.47,0.107033852,149,0.53024911),
+(15074,0,3773.08,0.113937285,162,0.576512456)
+
+
+
+ */
+ 
+
+
+TRUNCATE table [dbo].[t_km_clusters_tmp];
+--TRUNCATE table [dbo].[t_km_data_tmp];
+
+declare @stopping int;
+declare @v_K int;
+set @stopping = 10 -- investigate how long it takes to "converge" in our case. 10 is arbitrary. 
+set @v_K = 4 -- investigate how many clusters is optimal in your case. consider: https://www.jstatsoft.org/article/view/v061i06/v61i06.pdf
+
+-- initialize cluster centers
+INSERT INTO t_km_clusters_tmp (data1, data1_scaled, data2, data2_scaled ) 
+SELECT top (@v_K)  data1,  data1_scaled, data2,  data2_scaled 
+FROM t_km_data_tmp ;
+
+-- now iterate the moving of centroids. I have chosen ten iterations.  
+while @stopping > 1 
+	BEGIN 
+    -- assign clusters to data points
+
+	with cte3 as
+	(
+		select d.prim_key, t.cluster_id 
+		from t_km_data_tmp d 
+		cross apply (
+			select top 1 id as cluster_id
+			FROM t_km_clusters_tmp  as c
+			ORDER BY POWER(d.[data1_scaled]-c.[data1_scaled],2)+POWER(d.data2_scaled-c.data2_scaled,2) ASC
+					) as t
+	)
+
+	UPDATE t_km_data_tmp SET cluster_id = cte3.cluster_id
+	from t_km_data_tmp d inner join cte3
+	on cte3.prim_key = d.prim_key
+
+	-- calculate new cluster center as the "center of mass" of the centroid
+	;with cte4 as
+	(
+		SELECT cluster_id, 
+		AVG(data1) AS data1, 
+        AVG(data1_scaled) AS data1_scaled, 
+		AVG(data2) AS data2,
+		AVG(data2_scaled) AS data2_scaled
+		 
+        FROM [dbo].[t_km_data_tmp] GROUP BY cluster_id
+	)
+
+    UPDATE t_km_clusters_tmp  
+    SET data1=cte4.data1, data1_scaled=cte4.data1_scaled, data2=cte4.data2, data2_scaled=cte4.data2_scaled
+	from  t_km_clusters_tmp 
+	inner join cte4
+	on t_km_clusters_tmp.id=cte4.cluster_id;
+
+	-- decrement the stopping condition - considering writing logic to capture whether there is convergence
+	set @stopping = @stopping -1
+
+	
+	END
+
+	--This hold the clusters assigned to the data in cluster_id
+	--select * from [dbo].[t_km_data_tmp]
+
+	--This holds the centers of mass for each cluster
+	--select * from [dbo].[t_km_clusters_tmp]
+ 
+ 
